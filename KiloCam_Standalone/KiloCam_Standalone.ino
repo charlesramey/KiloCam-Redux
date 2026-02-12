@@ -14,7 +14,7 @@
 
 // ================= DEBUG CONFIG =================
 // Uncomment to enable Debug Mode (No Deep Sleep, Default to Config, No Hardware Check)
-// #define DEBUG_MODE
+#define DEBUG_MODE
 
 // ================= PIN DEFINITIONS =================
 #define REED_SWITCH_PIN 13 // Input, Pull-up, Wake on Low

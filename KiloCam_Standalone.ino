@@ -18,7 +18,11 @@
 // #define DEBUG_MODE
 
 // ================= PIN DEFINITIONS =================
-#define REED_SWITCH_PIN 13 // Input, Pull-up, Wake on Low
+// Using GPIO 33 (Onboard Red LED) for Reed Switch.
+// - Default: HIGH (LED OFF, via internal pullup + LED circuit)
+// - Magnet Held: LOW (LED ON)
+// - Avoids conflict with SD Card DAT3 (GPIO 13)
+#define REED_SWITCH_PIN 33
 #define LUMEN_PIN       12 // PWM Output
 
 // Standard ESP32-CAM (AI-Thinker) Camera Pins
@@ -218,11 +222,9 @@ void deepSleep() {
   // Configure Wakeups
   esp_sleep_enable_timer_wakeup(intervalSeconds * 1000000ULL);
 
-  // Wake if Reed Switch (GPIO 13) is LOW
-  // Note: ext0 uses RTC IO. GPIO 13 is RTC_GPIO 14?
-  // Valid RTC GPIOs: 0, 2, 4, 12, 13, 14, 15, 25, 26, 27, 32-39.
-  // Yes, 13 is RTC_GPIO_14.
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0); // 0 = Low
+  // Wake if Reed Switch (GPIO 33) is LOW
+  // GPIO 33 is RTC_GPIO 8.
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0); // 0 = Low
 
   esp_deep_sleep_start();
 }

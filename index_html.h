@@ -40,8 +40,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   <div class="card">
     <h2>Settings</h2>
     <form onsubmit="event.preventDefault(); saveSettings();">
-      <label for="devName">Device Name (SSID):</label>
-      <input type="text" id="devName" placeholder="e.g. camOne">
+      <!-- Device Name (SSID) Setting Removed -->
 
       <label for="interval">Interval (Seconds):</label>
       <input type="number" id="interval" placeholder="e.g. 300">
@@ -70,7 +69,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     fetch('/status').then(response => response.json()).then(data => {
       document.getElementById('status').innerText = `Device: ${data.name} | Storage: ${data.storage}`;
       document.getElementById('devTime').innerText = data.time;
-      document.getElementById('devName').value = data.name;
+      // document.getElementById('devName').value = data.name; // Removed
       document.getElementById('interval').value = data.interval;
       document.getElementById('lightPwm').value = data.lightPwm;
       document.getElementById('lightDur').value = data.lightDur;
@@ -114,12 +113,12 @@ const char index_html[] PROGMEM = R"rawliteral(
   }
 
   function saveSettings() {
-    const name = document.getElementById('devName').value;
+    // const name = document.getElementById('devName').value; // Removed
     const interval = document.getElementById('interval').value;
     const lightPwm = document.getElementById('lightPwm').value;
     const lightDur = document.getElementById('lightDur').value;
 
-    fetch(`/save-config?name=${name}&interval=${interval}&lightPwm=${lightPwm}&lightDur=${lightDur}`)
+    fetch(`/save-config?interval=${interval}&lightPwm=${lightPwm}&lightDur=${lightDur}`)
       .then(r => r.text())
       .then(alert);
   }

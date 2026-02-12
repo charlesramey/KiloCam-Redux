@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include "esp_camera.h"
 #include "Arduino.h"
@@ -14,7 +15,7 @@
 
 // ================= DEBUG CONFIG =================
 // Uncomment to enable Debug Mode (No Deep Sleep, Default to Config, No Hardware Check)
-#define DEBUG_MODE
+// #define DEBUG_MODE
 
 // ================= PIN DEFINITIONS =================
 #define REED_SWITCH_PIN 13 // Input, Pull-up, Wake on Low
@@ -42,7 +43,7 @@
 Preferences preferences;
 WebServer server(80);
 
-String devName = "KiloCam_1";
+String devName = "coralcamone";
 int intervalSeconds = 300; // 5 minutes
 int lightPwmVal = 1500;    // Default Brightness (1100-1900)
 int lightWarmup = 1000;    // Warmup time in ms
@@ -96,7 +97,8 @@ void setup() {
 
   // Load Settings
   preferences.begin("kilocam", false);
-  devName = preferences.getString("name", "KiloCam_1");
+  // Name is now hardcoded or set via other means if needed, but per request removed from UI
+  // devName = preferences.getString("name", "coralcamone");
   intervalSeconds = preferences.getInt("interval", 300);
   lightPwmVal = preferences.getInt("lightPwm", 1900); // Default to max brightness
   lightWarmup = preferences.getInt("lightDur", 1000);
@@ -173,6 +175,11 @@ void startConfigMode() {
   WiFi.softAP(devName.c_str());
   Serial.print("AP Started: ");
   Serial.println(WiFi.softAPIP());
+
+  // Start mDNS
+  if (MDNS.begin("coralcam")) { // URL: http://coralcam.local
+    Serial.println("mDNS responder started");
+  }
 
   // Web Server Routes
   server.on("/", handleRoot);
@@ -363,20 +370,20 @@ void handleStatus() {
 }
 
 void handleConfig() {
-  if (server.hasArg("name")) {
-    devName = server.arg("name");
+  if (server.hasArg("interval")) {
+    // devName = server.arg("name"); // Removed
     intervalSeconds = server.arg("interval").toInt();
     lightPwmVal = server.arg("lightPwm").toInt();
     lightWarmup = server.arg("lightDur").toInt();
 
     preferences.begin("kilocam", false);
-    preferences.putString("name", devName);
+    // preferences.putString("name", devName);
     preferences.putInt("interval", intervalSeconds);
     preferences.putInt("lightPwm", lightPwmVal);
     preferences.putInt("lightDur", lightWarmup);
     preferences.end();
 
-    server.send(200, "text/plain", "Settings Saved. Reboot required for Name change.");
+    server.send(200, "text/plain", "Settings Saved.");
   } else {
     server.send(400, "text/plain", "Bad Args");
   }

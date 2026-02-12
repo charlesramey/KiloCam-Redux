@@ -9,13 +9,17 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "driver/rtc_io.h"
-#include "driver/ledc.h"
 #include <sys/time.h>
 #include "index_html.h"
+
+// ================= DEBUG CONFIG =================
+// Uncomment to enable Debug Mode (No Deep Sleep, Default to Config, No Hardware Check)
+// #define DEBUG_MODE
 
 // ================= PIN DEFINITIONS =================
 #define REED_SWITCH_PIN 13 // Input, Pull-up, Wake on Low
 #define LUMEN_PIN       12 // PWM Output
+
 // Standard ESP32-CAM (AI-Thinker) Camera Pins
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -72,11 +76,22 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n\n--- KiloCam Standalone ---");
 
+  #ifdef DEBUG_MODE
+    Serial.println("!!! DEBUG MODE ENABLED !!!");
+  #endif
+
   // Init Pins
   pinMode(REED_SWITCH_PIN, INPUT_PULLUP);
-  // Lumen Pin Config
-  ledcSetup(pwmChannel, pwmFreq, pwmResolution);
-  ledcAttachPin(LUMEN_PIN, pwmChannel);
+
+  // Lumen Pin Config (Compatible with ESP32 Arduino Core 3.x)
+  // Check if ledcAttach is available (Core 3.x)
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcAttach(LUMEN_PIN, pwmFreq, pwmResolution);
+  #else
+    ledcSetup(pwmChannel, pwmFreq, pwmResolution);
+    ledcAttachPin(LUMEN_PIN, pwmChannel);
+  #endif
+
   setLight(0); // Ensure off
 
   // Load Settings
@@ -87,6 +102,12 @@ void setup() {
   lightWarmup = preferences.getInt("lightDur", 1000);
   currentOffset = preferences.getLong("offset", 0);
   preferences.end();
+
+  #ifdef DEBUG_MODE
+    // Force Config Mode for testing
+    startConfigMode();
+    return;
+  #endif
 
   // Check Wakeup Reason
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
@@ -107,11 +128,14 @@ void setup() {
 
 void loop() {
   server.handleClient();
+
+  #ifndef DEBUG_MODE
   // Auto-sleep if no activity for 10 minutes?
   if (millis() > 600000) {
     Serial.println("Timeout: Shutting down.");
     deepSleep();
   }
+  #endif
 }
 
 // ================= MODES =================
@@ -162,7 +186,9 @@ void startConfigMode() {
 
   // Serve static files (Gallery images)
   server.enableCORS(true);
-  server.serveStatic("/", SD_MMC);
+  // Fix for ESP32 Core 3.x: serveStatic requires 3rd arg for root path on FS
+  // server.serveStatic("/", SD_MMC); // Old Core 2.x
+  server.serveStatic("/", SD_MMC, "/"); // New Core 3.x
 
   server.begin();
   Serial.println("Web Server Started");
@@ -174,17 +200,19 @@ void deepSleep() {
   Serial.printf("Going to sleep for %d seconds...\n", intervalSeconds);
   Serial.flush();
 
+  #ifdef DEBUG_MODE
+    Serial.println("DEBUG MODE: Sleeping via delay(5000) instead of Deep Sleep.");
+    delay(5000);
+    // Simulate wakeup
+    ESP.restart();
+    return;
+  #endif
+
   // Configure Wakeups
   esp_sleep_enable_timer_wakeup(intervalSeconds * 1000000ULL);
 
   // Wake if Reed Switch (GPIO 13) is LOW
   // Note: ext0 uses RTC IO. GPIO 13 is RTC_GPIO 14?
-  // No, GPIO 13 is ADC2_4 / RTC_GPIO?
-  // ESP32-CAM: GPIO 13 is connected to SD Card usually.
-  // Wait, we are using 1-bit mode, so GPIO 13 is free.
-  // GPIO 13 is MTCK / HS2_DATA3. It IS an RTC GPIO (RTC_GPIO_14 ? No).
-  // Let's check: GPIO 13 is RTC_GPIO_14 ?
-  // Actually, ext0 only works with RTC GPIOs.
   // Valid RTC GPIOs: 0, 2, 4, 12, 13, 14, 15, 25, 26, 27, 32-39.
   // Yes, 13 is RTC_GPIO_14.
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0); // 0 = Low
@@ -196,11 +224,20 @@ void setLight(int us) {
   // 50Hz = 20000us period. 16-bit resolution (65536).
   // Duty = (us / 20000) * 65536
   if (us == 0) {
-    ledcWrite(pwmChannel, 0);
+    #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+       ledcWrite(LUMEN_PIN, 0);
+    #else
+       ledcWrite(pwmChannel, 0);
+    #endif
     return;
   }
   uint32_t duty = (us * 65536) / 20000;
-  ledcWrite(pwmChannel, duty);
+
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+     ledcWrite(LUMEN_PIN, duty);
+  #else
+     ledcWrite(pwmChannel, duty);
+  #endif
 }
 
 void setupCamera() {

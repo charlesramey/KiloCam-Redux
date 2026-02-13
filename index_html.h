@@ -91,8 +91,24 @@ const char index_html[] PROGMEM = R"rawliteral(
   }
 
   function startCollection() {
-    if(confirm("Start New Collection Run? This will create a new directory and start the loop.")) {
-      fetch('/control?action=start').then(r => r.text()).then(msg => alert(msg));
+    if(confirm("Start New Collection Run? This will sync time, create a new directory, and start the loop.")) {
+      // Sync Time First
+      const now = new Date();
+      const timestamp = Math.floor(now.getTime() / 1000);
+      const tzOffset = now.getTimezoneOffset() * -1;
+
+      fetch(`/set-time?time=${timestamp}&tz=${tzOffset}`)
+        .then(r => {
+            if(!r.ok) throw new Error("Time Sync Failed");
+            return r.text();
+        })
+        .then(() => {
+            // Then Start Collection
+            return fetch('/control?action=start');
+        })
+        .then(r => r.text())
+        .then(msg => alert("Time Synced & " + msg))
+        .catch(err => alert("Error starting collection: " + err));
     }
   }
 

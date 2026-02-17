@@ -6,7 +6,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   <style>
     body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; background-color: #f4f4f4; }
     h1 { color: #333; }
-    .card { background: white; padding: 20px; margin: 10px auto; max-width: 600px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .card { background: white; padding: 20px; margin: 10px auto; max-width: 800px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     button { background-color: #008CBA; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 5px; }
     button.red { background-color: #f44336; }
     button.green { background-color: #4CAF50; }
@@ -15,6 +15,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
     img.preview { max-width: 100%; height: auto; margin-top: 10px; border-radius: 4px; }
     .status-bar { padding: 10px; background: #e7f3fe; border-left: 6px solid #2196F3; margin-bottom: 15px; text-align: left; }
+    #gallery-controls { text-align: left; margin-bottom: 10px; }
+    .path-display { font-weight: bold; margin-left: 10px; }
   </style>
 </head>
 <body>
@@ -40,8 +42,6 @@ const char index_html[] PROGMEM = R"rawliteral(
   <div class="card">
     <h2>Settings</h2>
     <form onsubmit="event.preventDefault(); saveSettings();">
-      <!-- Device Name (SSID) Setting Removed -->
-
       <label for="interval">Interval (Seconds):</label>
       <input type="number" id="interval" placeholder="e.g. 300">
 
@@ -57,19 +57,24 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   <div class="card">
     <h2>Gallery</h2>
-    <button onclick="loadFiles()">Refresh List</button>
+    <div id="gallery-controls">
+        <button onclick="loadDirectory(currentPath)">Refresh</button>
+        <button id="backBtn" onclick="goUp()" style="display:none;">Back</button>
+        <span id="currentPathDisplay" class="path-display">/</span>
+    </div>
     <table id="fileTable">
-      <thead><tr><th>Name</th><th>Size</th><th>Action</th></tr></thead>
+      <thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
 
 <script>
+  let currentPath = '/';
+
   function fetchStatus() {
     fetch('/status').then(response => response.json()).then(data => {
       document.getElementById('status').innerText = `Device: ${data.name} | Storage: ${data.storage}`;
       document.getElementById('devTime').innerText = data.time;
-      // document.getElementById('devName').value = data.name; // Removed
       document.getElementById('interval').value = data.interval;
       document.getElementById('lightPwm').value = data.lightPwm;
       document.getElementById('lightDur').value = data.lightDur;
@@ -78,19 +83,32 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   function syncTime() {
     const now = new Date();
-    // Send local time as epoch seconds
     const timestamp = Math.floor(now.getTime() / 1000);
-    // Also send timezone offset in minutes (JS returns negative for ahead of UTC, so invert)
     const tzOffset = now.getTimezoneOffset() * -1;
-
     fetch(`/set-time?time=${timestamp}&tz=${tzOffset}`)
       .then(response => response.text())
       .then(alert);
   }
 
   function startCollection() {
-    if(confirm("Start Collection Mode? The device will take photos and sleep.")) {
-      fetch('/control?action=start').then(r => alert("Starting... Device will sleep shortly."));
+    if(confirm("Start New Collection Run? This will sync time, create a new directory, and start the loop.")) {
+      // Sync Time First
+      const now = new Date();
+      const timestamp = Math.floor(now.getTime() / 1000);
+      const tzOffset = now.getTimezoneOffset() * -1;
+
+      fetch(`/set-time?time=${timestamp}&tz=${tzOffset}`)
+        .then(r => {
+            if(!r.ok) throw new Error("Time Sync Failed");
+            return r.text();
+        })
+        .then(() => {
+            // Then Start Collection
+            return fetch('/control?action=start');
+        })
+        .then(r => r.text())
+        .then(msg => alert("Time Synced & " + msg))
+        .catch(err => alert("Error starting collection: " + err));
     }
   }
 
@@ -113,7 +131,6 @@ const char index_html[] PROGMEM = R"rawliteral(
   }
 
   function saveSettings() {
-    // const name = document.getElementById('devName').value; // Removed
     const interval = document.getElementById('interval').value;
     const lightPwm = document.getElementById('lightPwm').value;
     const lightDur = document.getElementById('lightDur').value;
@@ -123,32 +140,117 @@ const char index_html[] PROGMEM = R"rawliteral(
       .then(alert);
   }
 
-  function loadFiles() {
-    fetch('/list').then(r => r.json()).then(files => {
-      const tbody = document.querySelector('#fileTable tbody');
-      tbody.innerHTML = '';
-      files.forEach(f => {
-        const row = `<tr>
-          <td><a href="${f.name}" target="_blank">${f.name}</a></td>
-          <td>${f.size}</td>
-          <td><button class="red" style="padding:5px 10px;" onclick="deleteFile('${f.name}')">X</button></td>
-        </tr>`;
-        tbody.innerHTML += row;
+  function loadDirectory(path) {
+    currentPath = path;
+    document.getElementById('currentPathDisplay').innerText = currentPath;
+    document.getElementById('backBtn').style.display = (currentPath === '/' || currentPath === '') ? 'none' : 'inline-block';
+
+    fetch(`/list?path=${encodeURIComponent(path)}`)
+      .then(r => {
+        if (!r.ok) throw new Error("Failed to load");
+        return r.json();
+      })
+      .then(files => {
+        const tbody = document.querySelector('#fileTable tbody');
+        tbody.innerHTML = '';
+
+        // Sort: Directories first
+        files.sort((a, b) => (a.isDir === b.isDir) ? 0 : a.isDir ? -1 : 1);
+
+        files.forEach(f => {
+          let nameCell = f.name;
+          let sizeCell = f.size;
+          let actionsCell = '';
+
+          let fullPath = currentPath;
+          if (!fullPath.endsWith('/')) fullPath += '/';
+          fullPath += f.name;
+
+          if (f.isDir) {
+            nameCell = `<b>📁 ${f.name}</b>`;
+            sizeCell = '-';
+            actionsCell = `
+              <button class="green" style="padding:5px;" onclick="loadDirectory('${fullPath}')">Open</button>
+              <button style="padding:5px;" onclick="downloadAll('${fullPath}')">Down All</button>
+              <button class="red" style="padding:5px;" onclick="deleteItem('${fullPath}', true)">Del</button>
+            `;
+          } else {
+            let fileUrl = fullPath;
+            nameCell = `<a href="${fileUrl}" target="_blank">📄 ${f.name}</a>`;
+            actionsCell = `<button class="red" style="padding:5px;" onclick="deleteItem('${fullPath}', false)">Del</button>`;
+          }
+
+          const row = `<tr>
+            <td>${nameCell}</td>
+            <td>${sizeCell}</td>
+            <td>${actionsCell}</td>
+          </tr>`;
+          tbody.innerHTML += row;
+        });
+      })
+      .catch(e => {
+        console.error(e);
+        // alert("Error loading directory");
       });
-    });
   }
 
-  function deleteFile(fname) {
-    if(confirm(`Delete ${fname}?`)) {
-      fetch(`/delete?path=${fname}`).then(loadFiles);
+  function goUp() {
+    if (currentPath === '/' || currentPath === '') return;
+
+    // Normalize path to not end in slash unless root
+    if (currentPath.endsWith('/') && currentPath.length > 1) {
+        currentPath = currentPath.substring(0, currentPath.length - 1);
     }
+
+    let lastSlash = currentPath.lastIndexOf('/');
+    let newPath = currentPath.substring(0, lastSlash);
+    if (newPath === '') newPath = '/';
+    loadDirectory(newPath);
+  }
+
+  function deleteItem(path, isDir) {
+    if(confirm(`Delete ${isDir ? 'Directory (Recursive!)' : 'File'}: ${path}?`)) {
+      fetch(`/delete?path=${encodeURIComponent(path)}`)
+        .then(r => {
+            if(r.ok) {
+                loadDirectory(currentPath);
+            }
+            else alert("Delete Failed");
+        });
+    }
+  }
+
+  function downloadAll(dirPath) {
+    if(!confirm(`Download all files in ${dirPath}? This will open multiple downloads.`)) return;
+
+    fetch(`/list?path=${encodeURIComponent(dirPath)}`)
+      .then(r => r.json())
+      .then(files => {
+        let count = 0;
+        files.forEach((f, index) => {
+          if(!f.isDir) {
+            setTimeout(() => {
+                let fullPath = dirPath;
+                if (!fullPath.endsWith('/')) fullPath += '/';
+                fullPath += f.name;
+
+                const link = document.createElement('a');
+                link.href = fullPath;
+                link.download = f.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }, index * 500); // 500ms delay between downloads
+            count++;
+          }
+        });
+        if(count === 0) alert("No files to download.");
+      });
   }
 
   window.onload = function() {
     fetchStatus();
-    loadFiles();
-    // Auto-sync time if needed?
-    // syncTime();
+    loadDirectory('/');
   };
 </script>
 </body>

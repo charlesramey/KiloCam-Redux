@@ -52,6 +52,7 @@ int intervalSeconds = 300; // 5 minutes
 int lightPwmVal = 1500;    // Default Brightness (1100-1900)
 int lightWarmup = 1000;    // Warmup time in ms
 long currentOffset = 0;    // Timezone offset in seconds
+String currentDir = "/";   // Current Run Directory
 
 // PWM Properties for Lumen Light (Servo-like)
 const int pwmFreq = 50;
@@ -107,6 +108,7 @@ void setup() {
   lightPwmVal = preferences.getInt("lightPwm", 1900); // Default to max brightness
   lightWarmup = preferences.getInt("lightDur", 1000);
   currentOffset = preferences.getLong("offset", 0);
+  currentDir = preferences.getString("dir", "/");
   preferences.end();
 
   #ifdef DEBUG_MODE
@@ -320,13 +322,17 @@ void takePicture() {
   time(&now);
   localtime_r(&now, &timeinfo);
 
-  char path[32];
-  strftime(path, sizeof(path), "/IMG_%Y%m%d_%H%M%S.jpg", &timeinfo);
+  char filename[32];
+  strftime(filename, sizeof(filename), "/IMG_%Y%m%d_%H%M%S.jpg", &timeinfo);
 
-  Serial.printf("Saving file: %s\n", path);
+  String path = currentDir;
+  if (path == "/") path = "";
+  path += String(filename);
+
+  Serial.printf("Saving file: %s\n", path.c_str());
 
   fs::FS &fs = SD_MMC;
-  File file = fs.open(path, FILE_WRITE);
+  File file = fs.open(path.c_str(), FILE_WRITE);
   if(!file){
     Serial.println("Failed to open file in writing mode");
   } else {
@@ -415,7 +421,31 @@ void handleTime() {
 void handleControl() {
   String action = server.arg("action");
   if (action == "start") {
-    server.send(200, "text/plain", "Starting...");
+    // Generate new run directory
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    char dirName[32];
+    strftime(dirName, sizeof(dirName), "/Run_%Y%m%d_%H%M%S", &timeinfo);
+
+    // Create Directory
+    if(SD_MMC.mkdir(dirName)){
+      currentDir = String(dirName);
+
+      // Save new currentDir preference
+      preferences.begin("kilocam", false);
+      preferences.putString("dir", currentDir);
+      preferences.end();
+
+      Serial.printf("New Run Started: %s\n", currentDir.c_str());
+      server.send(200, "text/plain", "Starting new run: " + currentDir);
+    } else {
+      Serial.println("Failed to create directory");
+      server.send(500, "text/plain", "Failed to create directory");
+      return;
+    }
+
     delay(500);
     startOperatingMode(); // Will deep sleep
   } else if (action == "shutdown") {
@@ -432,27 +462,87 @@ void handleControl() {
 }
 
 void handleList() {
+  String path = "/";
+  if (server.hasArg("path")) path = server.arg("path");
+
+  if (!SD_MMC.exists(path)) {
+    server.send(404, "text/plain", "Path not found");
+    return;
+  }
+
+  File root = SD_MMC.open(path);
+  if (!root || !root.isDirectory()) {
+    server.send(500, "text/plain", "Not a directory");
+    return;
+  }
+
   String json = "[";
-  File root = SD_MMC.open("/");
   File file = root.openNextFile();
   bool first = true;
   while(file){
-    if(!file.isDirectory()){
-      if(!first) json += ",";
-      json += "{\"name\":\"" + String(file.name()) + "\",\"size\":" + String(file.size()) + "}";
-      first = false;
-    }
+    if(!first) json += ",";
+    String isDir = file.isDirectory() ? "true" : "false";
+    String fname = String(file.name());
+
+    // Cleanup name if it contains slashes (older cores)
+    int lastSlash = fname.lastIndexOf('/');
+    if (lastSlash >= 0) fname = fname.substring(lastSlash + 1);
+
+    json += "{\"name\":\"" + fname + "\",\"size\":" + String(file.size()) + ",\"isDir\":" + isDir + "}";
+    first = false;
     file = root.openNextFile();
   }
   json += "]";
   server.send(200, "application/json", json);
 }
 
+// Helper for recursive delete
+void removeDirRecursive(fs::FS &fs, String path) {
+  File dir = fs.open(path);
+  if (!dir || !dir.isDirectory()) return;
+
+  File file = dir.openNextFile();
+  while (file) {
+    String fileName = String(file.name());
+    int lastSlash = fileName.lastIndexOf('/');
+    if (lastSlash >= 0) fileName = fileName.substring(lastSlash + 1);
+
+    String filePath = path;
+    if (!filePath.endsWith("/")) filePath += "/";
+    filePath += fileName;
+
+    if (file.isDirectory()) {
+      removeDirRecursive(fs, filePath);
+    } else {
+      fs.remove(filePath);
+    }
+    file = dir.openNextFile();
+  }
+  fs.rmdir(path);
+}
+
 void handleDelete() {
   if(server.hasArg("path")) {
     String path = server.arg("path");
-    if(SD_MMC.remove(path)) server.send(200, "text/plain", "Deleted");
-    else server.send(500, "text/plain", "Delete Failed");
+    if (SD_MMC.exists(path)) {
+      File f = SD_MMC.open(path);
+      bool isDir = f.isDirectory();
+      f.close();
+
+      if (isDir) {
+        removeDirRecursive(SD_MMC, path);
+        // Check if it still exists (rmdir might fail if not empty or other error)
+        if (!SD_MMC.exists(path)) server.send(200, "text/plain", "Directory Deleted");
+        else server.send(500, "text/plain", "Delete Failed");
+      } else {
+        if(SD_MMC.remove(path)) server.send(200, "text/plain", "File Deleted");
+        else server.send(500, "text/plain", "Delete Failed");
+      }
+    } else {
+      server.send(404, "text/plain", "Path not found");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing path");
   }
 }
 
